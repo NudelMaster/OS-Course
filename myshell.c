@@ -13,24 +13,24 @@
 int perform_input_redirection(char** arglist, int redirect_index) {
 	pid_t pid = fork();
 	if (pid < 0) {
-		perror("Fork");
+		fprintf(stderr, "Fork error %s\n", strerror((errno)));
 		return 0;
 	}
 	if(pid == 0) {
 		// child process
 		if(signal(SIGINT, SIG_DFL) == SIG_ERR) {
 			// child should terminate upon SIGINT
-			perror("SIGNAL");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		int fd = open(arglist[redirect_index+1], O_RDONLY);
 		if(fd == -1) {
-			perror("Open");
+			fprintf(stderr, "File discriptor error %s\n", strerror((errno)));
 			exit(1);
 		}
 		if(dup2(fd, 0) == -1) {
 			// redirect stdin to the input file
-			perror("Dup error");
+			fprintf(stderr, "Duplication error %s\n", strerror((errno)));
 			exit(1);
 
 		}
@@ -40,18 +40,18 @@ int perform_input_redirection(char** arglist, int redirect_index) {
 		arglist[redirect_index] = NULL;
 		if(signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
 			// default child SIGINT handling to be restored to ensure correct handling after execvp
-			perror("Error on changing child signal");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		if(execvp(arglist[0], arglist) == -1) {
-			perror("Execution failed");
+			fprintf(stderr, "execvp error %s\n", strerror((errno)));
 			exit(1);
 		}
 	}
 	// parent process
 	if (waitpid(pid, NULL, 0)== -1) {
 		if(errno != ECHILD && errno != EINTR) {
-			perror("waitpid");
+			fprintf(stderr, "Waiting for child error in parent %s\n", strerror((errno)));
 			exit(1);
 		}
 		// otherwise child process finished successfuly
@@ -61,24 +61,24 @@ int perform_input_redirection(char** arglist, int redirect_index) {
 int perform_output_riderection(char** arglist, int redirect_index) {
 	pid_t pid = fork();
 	if (pid < 0) {
-		perror("Fork");
+		fprintf(stderr, "Fork error %s\n", strerror((errno)));
 		return 0;
 	}
 	if (pid == 0) {
 		// child process
 		if(signal(SIGINT, SIG_DFL) == SIG_ERR) {
 			// child should terminate upon SIGINT
-			perror("SIGNAL");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		int fd = open(arglist[redirect_index+1], O_WRONLY | O_CREAT | O_APPEND, 0644);
 		if(fd == -1) {
-			perror("Open");
+			fprintf(stderr, "File discriptor error %s\n", strerror((errno)));
 			exit(1);
 		}
 		if(dup2(fd, 1) == -1) {
 			// redirect stdin to the output file
-			perror("Dup error");
+			fprintf(stderr, "Duplication error %s\n", strerror((errno)));
 			exit(1);
 		}
 		// no need to use the fd anymore
@@ -87,18 +87,18 @@ int perform_output_riderection(char** arglist, int redirect_index) {
 		arglist[redirect_index] = NULL;
 		if(signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
 			// default child SIGINT handling to be restored to ensure correct handling after execvp
-			perror("Error on changing child signal");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		if(execvp(arglist[0], arglist) == -1) {
-			perror("Execution failed");
+			fprintf(stderr, "execvp error %s\n", strerror((errno)));
 			exit(1);
 		}
 	}
 	// parent process
 	if (waitpid(pid, NULL, 0)== -1) {
 		if(errno != ECHILD && errno != EINTR) {
-			perror("waitpid");
+			fprintf(stderr, "Waiting for child error in parent %s\n", strerror((errno)));
 			exit(1);
 		}
 		// otherwise child process finished successfuly
@@ -110,27 +110,27 @@ int perform_pipe(char** arglist, int pipe_index) {
 	int pipefd[2];
 	pid_t pid1, pid2;
 	if (pipe(pipefd) == -1) {
-		perror("pipe");
+		fprintf(stderr, "Pipe error %s\n", strerror((errno)));
 		return 0;
 	}
 
 	// creating first child for 1 end of the pipe
 	pid1 = fork();
 	if (pid1 < 0) {
-		perror("fork");
+		fprintf(stderr, "Fork error %s\n", strerror((errno)));
 		return 0;
 	}
 	// first child process
 	if (pid1 == 0) {
 		if(signal(SIGINT, SIG_DFL) == SIG_ERR) {
 			// child should terminate upon SIGINT
-			perror("SIGNAL");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		// closing reading end for this child
 		close(pipefd[0]);
 		if(dup2(pipefd[1], 1) == -1) {
-			perror("dup error");
+			fprintf(stderr, "Duplication error %s\n", strerror((errno)));
 			exit(1);
 		}
 		// close write end after duplication
@@ -138,13 +138,13 @@ int perform_pipe(char** arglist, int pipe_index) {
 
 		if(signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
 			// default child SIGINT handling to be restored to ensure correct handling after execvp
-			perror("Error on changing child signal");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		// preparing for the command execution
 		arglist[pipe_index] = NULL;
 		if(execvp(arglist[0], arglist) == -1) {
-			perror("Execution failed");
+			fprintf(stderr, "execvp error %s\n", strerror((errno)));
 			exit(1);
 		}
 
@@ -152,31 +152,31 @@ int perform_pipe(char** arglist, int pipe_index) {
 	// second child for 2nd pipe end
 	pid2 = fork();
 	if(pid2 < 0) {
-		perror("fork");
+		fprintf(stderr, "Fork error %s\n", strerror((errno)));
 		exit(1);
 	}
 	// child process
 	if(pid2 == 0) {
 		if(signal(SIGINT, SIG_DFL) == SIG_ERR) {
 			// child should terminate upon SIGINT
-			perror("SIGNAL");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		// no writing to the pipe
 		close(pipefd[1]);
 		if(dup2(pipefd[0], 0) == -1) {
-			perror("dup error");
+			fprintf(stderr, "Duplication error %s\n", strerror((errno)));
 			exit(1);
 		}
 		// close the second end of the pipe
 		close(pipefd[0]);
 		if(signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
 			// default child SIGINT handling to be restored to ensure correct handling after execvp
-			perror("Error on changing child signal");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		if(execvp(arglist[pipe_index+1], arglist + pipe_index + 1) == -1) {
-			perror("Execution failed");
+			fprintf(stderr, "execvp error %s\n", strerror((errno)));
 			exit(1);
 		}
 	}
@@ -187,14 +187,14 @@ int perform_pipe(char** arglist, int pipe_index) {
 
 	if (waitpid(pid1, NULL, 0)== -1) {
 		if(errno != ECHILD && errno != EINTR) {
-			perror("waitpid");
+			fprintf(stderr, "Waiting for child error in parent %s\n", strerror((errno)));
 			exit(1);
 		}
 		// otherwise child process finished successfuly
 	}
 	if (waitpid(pid2, NULL, 0)== -1) {
 		if(errno != ECHILD && errno != EINTR) {
-			perror("waitpid");
+			fprintf(stderr, "Waiting for child error in parent %s\n", strerror((errno)));
 			exit(1);
 		}
 		// otherwise child process finished successfuly
@@ -209,23 +209,23 @@ int background(char** arglist, int count) {
 	arglist[count-1] = NULL;
 	if (pid == -1){
 		// fork failed
-		perror("fork");
+		fprintf(stderr, "Fork error %s\n", strerror((errno)));
 		return 0;
 	}
 	// child process
 	if(pid == 0) {
 		// ignore SIGINT during background process
 		if(signal(SIGINT, SIG_IGN) == SIG_ERR) {
-			perror("signal");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		if(signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
 			// default child SIGINT handling to be restored to ensure correct handling after execvp
-			perror("Error on changing child signal");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		if(execvp(arglist[0], arglist) == -1) {
-			perror("Execution failed");
+			fprintf(stderr, "execvp error %s\n", strerror((errno)));
 			exit(1);
 		}
 	}
@@ -237,29 +237,29 @@ int perform_non_background(char** arglist) {
 	pid_t pid = fork();
 	if (pid == -1){
 		// fork failed
-		perror("fork");
+		fprintf(stderr, "Fork error %s\n", strerror((errno)));
 		return 0;
 	}
 	if (pid == 0) {
 		if(signal(SIGINT, SIG_DFL) == SIG_ERR) {
 			// child should terminate upon SIGINT
-			perror("SIGNAL");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		if(signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
 			// default child SIGINT handling to be restored to ensure correct handling after execvp
-			perror("Error on changing child signal");
+			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
 		if(execvp(arglist[0], arglist) == -1) {
-			perror("Execution failed");
+			fprintf(stderr, "execvp error %s\n", strerror((errno)));
 			exit(1);
 		}
 	}
 	// parent process
 	if (waitpid(pid, NULL, 0)== -1) {
 		if(errno != ECHILD && errno != EINTR) {
-			perror("waitpid");
+			fprintf(stderr, "Waiting for child error in parent %s\n", strerror((errno)));
 			exit(1);
 		}
 		// otherwise child process finished successfuly
