@@ -23,7 +23,6 @@ int perform_input_redirection(char** arglist, int redirect_index) {
 			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
-		// opening file with read only permission
 		int fd = open(arglist[redirect_index+1], O_RDONLY);
 		if(fd == -1) {
 			fprintf(stderr, "File discriptor error %s\n", strerror((errno)));
@@ -72,7 +71,6 @@ int perform_output_riderection(char** arglist, int redirect_index) {
 			fprintf(stderr, "Child signal configuration error %s\n", strerror((errno)));
 			exit(1);
 		}
-		// opening file with permissions, creating if doesn't exist
 		int fd = open(arglist[redirect_index+1], O_WRONLY | O_CREAT | O_APPEND, 0644);
 		if(fd == -1) {
 			fprintf(stderr, "File discriptor error %s\n", strerror((errno)));
