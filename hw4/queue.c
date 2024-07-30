@@ -91,7 +91,8 @@ void enqueue(void* Data) {
     Node *newElem = malloc(sizeof(Node));
     newElem->data = Data;
     newElem->next = NULL;
-    newElem->deleting_thrd;
+    // default value for later use
+    newElem->deleting_thrd = NULL;
     // adding the node to the queue
     mtx_lock(&q_lock);
     if(q.front == NULL) {
@@ -106,85 +107,119 @@ void enqueue(void* Data) {
     if(threads.front != NULL) {
         // if there are threads waiting for dequeue
         newElem->deleting_thrd = &threads.front->thrd;
-        // remove thread from queue
-        remove_thread();
         // wakeup for dequeue
         cnd_signal(&threads.front->cnd);
+        // once the correct thread signaled can be dequeued for the next waiting thread to be signaled
+        // remove thread from queue - the mutex still hasn't been released
+        remove_thread();
     }
     mtx_unlock(&q_lock);
 }
 
+void* woken_thrd_dequeue() {
+// function that removes an element according to a thread that has awakened
+    void *data = NULL;
+    Node *temp = NULL;
+    temp = q.front;
+    // if the current_thrd corresponds to the front node
+    if(*temp->deleting_thrd == thrd_current()) {
+        data = temp->data;
+        q.front = q.front->next;
+        if(q.front == NULL) {
+            q.back = NULL;
+        }
+        free(temp);
+        return data;
+    }
+    // search the corresponding running thread for the node to remove
+    Node *prev = NULL;
+    while(temp != NULL && *temp->deleting_thrd != thrd_current()) {
+        prev = temp;
+        temp = temp->next;
+    }
+    if(temp == NULL || prev == NULL) {
+        printf("Error, temp and prev should not be NULL since node must exist in Queue\n");
+        return NULL;
+    }
+    data = temp->data;
+    // if the node to remove is the back
+    if(temp == q.back) {
+        prev->next = NULL;
+        q.back = prev;
+    }
+    else {
+        // unlink the node from the queue
+        prev->next = temp->next;
+    }
+    free(temp);
+    return data;
+}
+void* non_waiting_thrd_dequeue() {
+    // function the dequeues element in case of more elements in queue than waiting threads
+    void *data = NULL;
+    Node *temp = NULL;
+    temp = q.front;
+    // if the current_thrd corresponds to the front node
+    if(temp->deleting_thrd == NULL) {
+        data = temp->data;
+        q.front = q.front->next;
+        if(q.front == NULL) {
+            q.back = NULL;
+        }
+        free(temp);
+        return data;
+    }
+    // search the corresponding running thread for the node to remove
+    Node *prev = NULL;
+    while(temp != NULL && temp->deleting_thrd != NULL) {
+        prev = temp;
+        temp = temp->next;
+    }
+    if(temp == NULL || prev == NULL) {
+        printf("Error, temp and prev should not be NULL since node must exist in Queue\n");
+        return NULL;
+    }
+    data = temp->data;
+    // if the node to remove is the back
+    if(temp == q.back) {
+        prev->next = NULL;
+        q.back = prev;
+    }
+    else {
+        // unlink the node from the queue
+        prev->next = temp->next;
+    }
+    free(temp);
+    return data;
+}
 void* dequeue(void) {
     mtx_lock(&q_lock);
     void *data = NULL;
-    Node *temp = NULL;
-    if(q.front == NULL) {
+    if(q.size <= threads.waiting) {
+        // in case of not having enough elements to dequeue send thread to sleep
         // add thread to the thread queue
         cnd_t cond;
         cnd_init(&cond);
         add_thread(thrd_current(), cond);
         // start waiting until this thread is woken up, occurs after enqueue
         cnd_wait(&cond, &q_lock);
-    }
-    else {
-        // q not empty can attempt regular dequeue
-        temp = q.front;
-        data = q.front->data;
-        q.front = q.front->next;
-        if(q.front == NULL) {
-            q.back = NULL;
-        }
-        free(temp);
-        q.size--;
-        q.visited++;
-        mtx_unlock(&q_lock);
-        return data;
-    }
-    // currently the working thread can be any Node in the queue, need to find the correct one for deletion
-    temp = q.front;
-    Node *prev = NULL;
-    // if the current_thrd corresponds to the front node
-    if(*temp->deleting_thrd == thrd_current()) {
-        data = temp->data;
-        temp = temp->next;
-        if(temp == NULL) {
-            q.back = NULL;
-        }
-        free(temp);
+        // after waking up there is at least one element in the front, reach the correct node and remove
+        // when wakes up he has a node that waits for him for removal now the only thing left is to find and remove it
+        data = woken_thrd_dequeue();
+        threads.waiting--;
         q.size--;
         //each dequeue makes one item visit a queue
         q.visited++;
         mtx_unlock(&q_lock);
         return data;
-    }
-    // search the corresponding running thread for the node to remove
-    while(temp != NULL && *temp->deleting_thrd != thrd_current()) {
-        prev = temp;
-        temp = temp->next;
-    }
-    if(temp == NULL || prev == NULL) {
-        printf("Invalid \n");
-    }
-    else {
-        data = temp->data;
-        // if the node to remove is the back
-        if(temp == q.back) {
-            prev->next = NULL;
-            q.back = prev;
         }
-        else {
-            // unlink the node from the queue
-            prev->next = temp->next;
-        }
-        free(temp);
-        q.size--;
-        //each dequeue makes one item visit a queue
-        q.visited++;
-        mtx_unlock(&q_lock);
-    }
+    // at this point there is at least 1 element in the queue which doesn't have a waiting thread,
+    // find the element which doesn't have a thread attached to it
+    data = non_waiting_thrd_dequeue();
+    mtx_unlock(&q_lock);
     return data;
-}
 
+}
 
 bool tryDequeue(void** data) {
     mtx_lock(&q_lock);
