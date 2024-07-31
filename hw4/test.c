@@ -4,6 +4,8 @@
 #include <stdatomic.h>
 #include <assert.h>
 #include "queue.h"
+// to compile
+// gcc -O3 -D_POSIX_C_SOURCE=200809 -Wall -std=c11 -pthread queue.c test.c -o test//
 
 // Helper function to print test results
 void print_result(const char *test_name, bool result) {
