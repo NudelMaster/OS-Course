@@ -1,241 +1,404 @@
-#include "queue.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <threads.h>
-#include <unistd.h>
-typedef struct ThreadNode {
-    thrd_t thrd;
-    cnd_t cnd;
-    struct ThreadNode *next;
-}ThreadNode;
+#include <stdatomic.h>
+#include <assert.h>
+#include "queue.h"
 
-typedef struct ThreadQueue {
-    ThreadNode *front;
-    ThreadNode *back;
-    size_t waiting;
-}thrd_queue;
-
-typedef struct Node{
-    void *data;
-    struct Node *next;
-
-}Node;
-
-typedef struct Queue {
-    Node *front;
-    Node *back;
-    size_t size;
-    size_t visited;
-}queue;
-
-queue q;
-thrd_queue threads;
-mtx_t q_lock;
-bool awaken = false;
-
-void initQueue(void) {
-    printf("Initiating Queue \n");
-    q.front = q.back = NULL;
-    threads.front = threads.back = NULL;
-    q.size = 0;
-    q.visited = 0;
-    mtx_init(&q_lock, mtx_plain);
-}
-void destroyQueue(void) {
-    printf("Destroying Queue \n");
-    mtx_lock(&q_lock);
-    while(q.front != NULL) {
-        Node *tmp = q.front;
-        q.front = q.front->next;
-        free(tmp);
-    }
-    q.size = 0;
-    q.back = NULL;
-
-    while(threads.front != NULL) {
-        ThreadNode *tmp = threads.front;
-        threads.front = threads.front->next;
-        cnd_destroy(&tmp->cnd);
-        free(tmp);
-    }
-    threads.back = NULL;
-    threads.waiting = 0;
-    mtx_unlock(&q_lock);
-    mtx_destroy(&q_lock);
-}
-void add_thread(thrd_t thread) {
-    cnd_t cnd;
-    cnd_init(&cnd);
-    ThreadNode* thread_node = malloc(sizeof(ThreadNode));
-    thread_node->thrd = thread;
-    thread_node->cnd = cnd;
-    thread_node->next = NULL;
-    if(threads.front == NULL) {
-        threads.front = threads.back = thread_node;
-    }
-    else {
-        threads.back->next = thread_node;
-        threads.back = thread_node;
-    }
-    threads.waiting++;
-}
-void remove_thread(void) {
-    ThreadNode *tmp = threads.front;
-    if(tmp != NULL) {
-        threads.front = threads.front->next;
-        if(threads.front == NULL) {
-            threads.back = NULL;
-        }
-        cnd_destroy(&tmp->cnd);
-        free(tmp);
-    }
-}
-void printThreadElements(void) {
+// Helper function to print test results
+void print_result(const char *test_name, bool result) {
+    printf("%s: %s\n", test_name, result ? "PASSED" : "FAILED");
     int i = 0;
-    if(threads.front == NULL) {
-        printf("No threads waiting\n");
+    for(i = 0; i < 5; i++) {
+        printf("\n");
     }
-    else {
-        ThreadNode *tmp = threads.front;
-        while(tmp != NULL) {
-            printf("Waiting Thread number %d, is %lu\n", i, tmp->thrd);
-            tmp = tmp->next;
+}
+
+// Function to test basic functionality of the queue
+void test_basic_functionality() {
+    initQueue();
+
+    // Test enqueue and size
+    enqueue((void *)(long)1);
+    enqueue((void *)(long)2);
+    enqueue((void *)(long)3);
+    print_result("Basic Functionality - Size after 3 enqueues \n", size() == 3);
+
+    // Test dequeue
+    assert((long)dequeue() == 1);
+    assert((long)dequeue() == 2);
+    assert((long)dequeue() == 3);
+    print_result("Basic Functionality - Dequeue \n", size() == 0);
+
+    // Test visited
+    print_result("Basic Functionality - Visited after 3 enqueues and 3 dequeues \n", visited() == 3);
+
+    destroyQueue();
+}
+
+// Function to test edge cases of the queue
+void test_edge_cases() {
+    initQueue();
+
+    // Test dequeue on empty queue (should block)
+    thrd_t thread;
+    bool thread_finished = false;
+
+    // Thread function to dequeue from an empty queue
+    int dequeue_thread(void *arg){
+        (void)arg;
+        dequeue();
+        thread_finished = true;
+        return 0;
+    }
+
+    thrd_create(&thread, dequeue_thread, NULL);
+    thrd_sleep(&(struct timespec){.tv_sec = 1, .tv_nsec = 0}, NULL);
+    print_result("Edge Case - Dequeue on empty queue blocks \n", !thread_finished);
+
+    // Enqueue to unblock the thread
+    enqueue((void *)(long)1);
+    thrd_join(thread, NULL);
+    print_result("Edge Case - Dequeue on empty queue unblocks \n", thread_finished);
+
+    // Test tryDequeue on empty queue
+    void *item;
+    void *former_item = item;
+    bool result = tryDequeue(&item);
+    print_result("Edge Case - TryDequeue on empty queue \n", !result && item == former_item);
+
+    // Test tryDequeue on non-empty queue
+    enqueue((void *)(long)2);
+    result = tryDequeue(&item);
+    print_result("Edge Case - TryDequeue on non-empty queue \n", result && (long)item == 2);
+
+    destroyQueue();
+}
+
+// Function to test concurrency
+void test_concurrency() {
+    initQueue();
+
+    const int num_threads = 5;
+    const int num_items_per_thread = 1000;
+    thrd_t threads[num_threads];
+    atomic_size_t counter;
+    counter = ATOMIC_VAR_INIT(0);
+
+    // Thread function to enqueue items
+    int enqueue_thread(void *arg) {
+        long id = (long)arg;
+        for (int i = 0; i < num_items_per_thread; ++i) {
+            enqueue((void *)(id * num_items_per_thread + i));
         }
-        sleep(1);
+        return 0;
     }
-    i = 0;
-    if(q.front == NULL) {
-        printf("No elements in queue\n");
-    }
-    else {
-        Node *tmp = q.front;
-        while(tmp != NULL) {
-            printf("Node number %d, is %p\n", i, q.front->data);
-            tmp = tmp->next;
+
+    // Thread function to dequeue items
+    int dequeue_thread(void *arg) {
+        (void)arg;
+        for (int i = 0; i < num_items_per_thread; ++i) {
+            dequeue();
+            atomic_fetch_add(&counter, 1);
         }
-        sleep(2);
+        return 0;
     }
 
-}
-void enqueue(void* Data) {
-    Node *newElem = malloc(sizeof(Node));
-    newElem->data = Data;
-    newElem->next = NULL;
-    // adding the node to the back of the queue
-    mtx_lock(&q_lock);
-    printf("current thread working on enqueue is: %lu \n", thrd_current());
-    sleep(2);
-    printThreadElements();
-    printf("Iniating enqueue \n");
-    if(q.front == NULL) {
-        q.front = q.back = newElem;
+    // Create enqueue threads
+    for (long i = 0; i < num_threads; ++i) {
+        thrd_create(&threads[i], enqueue_thread, (void *)i);
     }
-    else {
-        q.back->next = newElem;
-        q.back = newElem;
+
+    // Wait for enqueue threads to finish
+    for (int i = 0; i < num_threads; ++i) {
+        thrd_join(threads[i], NULL);
     }
-    q.size++;
-    // if threads are waiting and none have been awaken yet start awakening
-    // if there are no threads waiting no need to awake
-    // if a thread is awaken he will be responsible for awakening the rest of the threads
-    if(threads.front != NULL && !awaken) {
-        // if there are threads waiting for dequeue
-        // wakeup for dequeue
-        printf("current thread awakening during enqueue is: %lu \n", threads.front->thrd);
-        cnd_signal(&threads.front->cnd);
-        awaken = true;
-        // once the correct thread signaled can be dequeued for the next waiting thread to be signaled
-        // remove thread from queue - the mutex still hasn't been released
-        remove_thread();
+
+    // Check if the size of the queue is correct
+    print_result("Concurrency - Size after enqueues \n", size() == num_threads * num_items_per_thread);
+
+    // Create dequeue threads
+    for (int i = 0; i < num_threads; ++i) {
+        thrd_create(&threads[i], dequeue_thread, NULL);
     }
-    printf("Unlocking enqueue lock \n");
-    mtx_unlock(&q_lock);
+
+    // Wait for dequeue threads to finish
+    for (int i = 0; i < num_threads; ++i) {
+        thrd_join(threads[i], NULL);
+    }
+
+    // Check if all items were dequeued
+    print_result("Concurrency - Dequeue all items \n", counter == num_threads * num_items_per_thread);
+
+    destroyQueue();
 }
 
-void* awaken_dequeue(void** data) {
-    Node *temp = q.front;
-    if(temp == NULL) {
-        printf("temp can't be null after thread has been awakene \n");
-        return NULL;
+// Function to test visited count
+void test_visited_count() {
+    initQueue();
+
+    // Enqueue and dequeue multiple items
+    const int num_items = 10;
+    for (int i = 0; i < num_items; ++i) {
+        enqueue((void *)(long)i);
     }
-    data = temp->data;
-    q.front = q.front->next;
-    if(q.front == NULL) {
-        q.back = NULL;
+    for (int i = 0; i < num_items; ++i) {
+        dequeue();
     }
-    q.visited++;
-    q.size--;
-    free(temp);
-    threads.waiting--;
-    awaken = false;
-    // if there are still threads waiting and there are more elements to dequeue, then awaken the next thread.
-    if(threads.front != NULL && q.size > 0) {
-        printf("next thread awakening during dequeue is:  %lu \n", threads.front->thrd);
-        cnd_signal(&threads.front->cnd);
-        awaken = true;
-        remove_thread();
+
+    print_result("Visited Count - After 10 enqueues and dequeues \n", visited() == num_items);
+
+    // Enqueue and dequeue again to check if the visited count accumulates correctly
+    for (int i = 0; i < num_items; ++i) {
+        enqueue((void *)(long)i);
     }
-    return data;
-}
-void* dequeue(void) {
-    mtx_lock(&q_lock);
-    printf("New thread trying to dequeue is: %lu\n", thrd_current());
-    sleep(2);
-    printThreadElements();
-    void *data = NULL;
-    // if no elements in the queue or there is at least one thread that is awaken go to sleep
-    if(q.front == NULL || awaken) {
-        add_thread(thrd_current());
-        printf("Dequeue thread has been put to sleep \n");
-        cnd_wait(&threads.back->cnd, &q_lock);
-        // thread has been awakened, can delete the first
-        printf("Awakened thread is: %lu\n", thrd_current());
-        data = awaken_dequeue(data);
-        mtx_unlock(&q_lock);
-        return data;
+    for (int i = 0; i < num_items; ++i) {
+        dequeue();
     }
-    // if q has elements and none is awaken, meaning in this point dequeue was called after series of enqueues
-    Node *temp = q.front;
-    if(temp == NULL) {
-        printf("temp can't be null after thread has been awakened\n");
-        return NULL;
-    }
-    data = temp->data;
-    q.front = q.front->next;
-    if(q.front == NULL) {
-        q.back = NULL;
-    }
-    q.visited++;
-    q.size--;
-    mtx_unlock(&q_lock);
-    return data;
+
+    print_result("Visited Count - After 20 enqueues and dequeues \n", visited() == 2 * num_items);
+
+    destroyQueue();
 }
 
-bool tryDequeue(void** data) {
-    mtx_lock(&q_lock);
-    printf("New Thread tryin to tryDequeue: %lu\n", thrd_current());
-    sleep(2);
-    printThreadElements();
-    // if there are more elements than awaken + waiting threads, put to sleep
-    if(awaken + threads.waiting < q.size) {
-        add_thread(thrd_current());
-        cnd_wait(&threads.back->cnd, &q_lock);
-        // once awaken there are enough threads to work with
-        data = awaken_dequeue(data);
-        mtx_unlock(&q_lock);
-        return true;
+// Function to stress test the queue with a large number of operations
+void stress_test() {
+    initQueue();
+
+    const int num_threads = 4;  // Reduce number of threads
+    const int num_operations = 500;  // Reduce number of operations
+    thrd_t threads[num_threads];
+    atomic_size_t enqueue_counter = ATOMIC_VAR_INIT(0);
+    atomic_size_t dequeue_counter = ATOMIC_VAR_INIT(0);
+
+    // Thread function to perform enqueue operations
+    int enqueue_thread(void *arg) {
+        (void)arg;
+        for (int i = 0; i < num_operations; ++i) {
+            enqueue((void *)(long)i);
+            atomic_fetch_add(&enqueue_counter, 1);
+        }
+        return 0;
     }
-    mtx_unlock(&q_lock);
-    return false;
+
+    // Thread function to perform dequeue operations
+    int dequeue_thread(void *arg) {
+        (void)arg;
+        for (int i = 0; i < num_operations; ++i) {
+            dequeue();
+            atomic_fetch_add(&dequeue_counter, 1);
+        }
+        return 0;
+    }
+
+    // Create enqueue threads
+    for (int i = 0; i < num_threads / 2; ++i) {
+        thrd_create(&threads[i], enqueue_thread, NULL);
+    }
+
+    // Create dequeue threads
+    for (int i = num_threads / 2; i < num_threads; ++i) {
+        thrd_create(&threads[i], dequeue_thread, NULL);
+    }
+
+    // Wait for all threads to finish
+    for (int i = 0; i < num_threads; ++i) {
+        thrd_join(threads[i], NULL);
+    }
+
+    print_result("Stress Test - Total enqueues \n", enqueue_counter == (num_threads / 2) * num_operations);
+    print_result("Stress Test - Total dequeues \n", dequeue_counter == (num_threads / 2) * num_operations);
+
+    destroyQueue();
 }
 
-size_t size(void) {
-    return q.size;
+// Function to test FIFO order
+void test_fifo_order() {
+    initQueue();
+
+    // Enqueue multiple items
+    for (int i = 1; i <= 5; ++i) {
+        enqueue((void *)(long)i);
+    }
+
+    // Dequeue and check order
+    bool fifo_order = true;
+    for (int i = 1; i <= 5; ++i) {
+        if ((long)dequeue() != i) {
+            fifo_order = false;
+            break;
+        }
+    }
+
+    print_result("FIFO Order Test \n", fifo_order);
+
+    destroyQueue();
 }
-size_t waiting(void) {
-    return threads.waiting;
+
+// Function to test multiple threads enqueuing and dequeuing
+void test_multiple_threads() {
+    initQueue();
+
+    const int num_threads = 10;
+    const int num_items_per_thread = 100;
+    thrd_t threads[num_threads];
+    atomic_size_t counter = ATOMIC_VAR_INIT(0);
+
+    // Thread function to enqueue and dequeue items
+    int thread_func(void *arg) {
+        long id = (long)arg;
+        for (int i = 0; i < num_items_per_thread; ++i) {
+            enqueue((void *)(id * num_items_per_thread + i));
+        }
+        for (int i = 0; i < num_items_per_thread; ++i) {
+            dequeue();
+            atomic_fetch_add(&counter, 1);
+        }
+        return 0;
+    }
+
+    // Create threads
+    for (long i = 0; i < num_threads; ++i) {
+        thrd_create(&threads[i], thread_func, (void *)i);
+    }
+
+    // Wait for threads to finish
+    for (int i = 0; i < num_threads; ++i) {
+        thrd_join(threads[i], NULL);
+    }
+
+    // Check if all items were dequeued
+    print_result("Multiple Threads Test - Dequeue all items \n", counter == num_threads * num_items_per_thread);
+
+    destroyQueue();
 }
-size_t visited(void) {
-    return q.visited;
+
+// Function to test large data
+void test_large_data() {
+    initQueue();
+
+    const int num_items = 100000;
+    for (int i = 0; i < num_items; ++i) {
+        enqueue((void *)(long)i);
+    }
+
+    bool large_data_correct = true;
+    for (int i = 0; i < num_items; ++i) {
+        if ((long)dequeue() != i) {
+            large_data_correct = false;
+            break;
+        }
+    }
+
+    print_result("Large Data Test \n", large_data_correct);
+
+    destroyQueue();
+}
+
+// Function to test random operations
+void test_random_operations() {
+    initQueue();
+
+    const int num_operations = 1000;
+    thrd_t threads[2];
+
+    // Thread function to perform random enqueue/dequeue operations
+    int random_operations(void *arg) {
+        (void)arg;
+        for (int i = 0; i < num_operations; ++i) {
+            if (rand() % 2) {
+                enqueue((void *)(long)i);
+            } else if (size() > 0) {
+                dequeue();
+            }
+        }
+        return 0;
+    }
+
+    // Create threads
+    for (int i = 0; i < 2; ++i) {
+        thrd_create(&threads[i], random_operations, NULL);
+        thrd_sleep(&(struct timespec){.tv_sec = 0, .tv_nsec = 5000}, NULL);
+    }
+
+    // Wait for threads to finish
+    for (int i = 0; i < 2; ++i) {
+        thrd_join(threads[i], NULL);
+    }
+
+    print_result("Random Operations Test - No deadlocks \n", true);
+
+    destroyQueue();
+}
+
+// Function to test that threads wake up in correct order
+void test_thread_wakeup_order() {
+    initQueue();
+
+    const int num_threads = 3;
+    thrd_t threads[num_threads];
+    atomic_size_t wakeup_order[num_threads];
+    atomic_size_t wakeup_index = ATOMIC_VAR_INIT(0);
+
+    // Thread function to dequeue and record wakeup order
+    int dequeue_and_record(void *arg) {
+        long id = (long)arg;
+        dequeue();
+        wakeup_order[atomic_fetch_add(&wakeup_index, 1)] = id;
+        return 0;
+    }
+
+    // Create threads
+    for (long i = 0; i < num_threads; ++i) {
+        thrd_create(&threads[i], dequeue_and_record, (void *)i);
+        thrd_sleep(&(struct timespec){.tv_sec = 1, .tv_nsec = 0}, NULL);
+    }
+
+    // Enqueue items to wake up the threads
+    for (int i = 0; i < num_threads; ++i) {
+        enqueue((void *)(long)i);
+    }
+
+    // Wait for threads to finish
+    for (int i = 0; i < num_threads; ++i) {
+        thrd_join(threads[i], NULL);
+    }
+
+    // Check if threads were woken up in the correct order
+    bool correct_order = true;
+    for (int i = 0; i < num_threads; ++i) {
+        if (wakeup_order[i] != i) {
+            correct_order = false;
+            break;
+        }
+    }
+
+    print_result("Thread Wakeup Order Test \n", correct_order);
+
+    destroyQueue();
+}
+
+int main() {
+    test_basic_functionality();
+    printf("Finished 1st\n");
+    test_edge_cases();
+    printf("Finished 2nd \n");
+    test_concurrency();
+    printf("Finished 3rd \n");
+    test_visited_count();
+    printf("Finished 4th \n");
+    stress_test();
+    printf("Finished 5th \n");
+    test_fifo_order();
+    printf("Finished 6th \n");
+    test_multiple_threads();
+    printf("Finished 7th \n");
+    test_large_data();
+    printf("Finished 8th \n");
+    test_random_operations();
+    printf("Finished 9th \n");
+    test_thread_wakeup_order();
+    printf("Finished 10th \n");
+
+    return 0;
 }
