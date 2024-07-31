@@ -58,6 +58,7 @@ void destroyQueue(void) {
         free(tmp);
     }
     threads.back = NULL;
+    threads.waiting = 0;
     mtx_unlock(&q_lock);
     mtx_destroy(&q_lock);
 }
@@ -91,7 +92,7 @@ void enqueue(void* Data) {
     Node *newElem = malloc(sizeof(Node));
     newElem->data = Data;
     newElem->next = NULL;
-    // adding the node to the queue
+    // adding the node to the back of the queue
     mtx_lock(&q_lock);
     if(q.front == NULL) {
         q.front = q.back = newElem;
@@ -116,7 +117,30 @@ void enqueue(void* Data) {
     mtx_unlock(&q_lock);
 }
 
-
+void* awaken_dequeue(void** data) {
+    Node *temp = q.front;
+    if(temp == NULL) {
+        printf("temp can't be null after thread has been awakene \n");
+        return NULL;
+    }
+    data = temp->data;
+    q.front = q.front->next;
+    if(q.front == NULL) {
+        q.back = NULL;
+    }
+    q.visited++;
+    q.size--;
+    free(temp);
+    threads.waiting--;
+    awaken = false;
+    // if there are still threads waiting and there are more elements to dequeue, then awaken the next thread.
+    if(threads.front != NULL && q.size > 0) {
+        cnd_signal(&threads.front->cnd);
+        awaken = true;
+        remove_thread();
+    }
+    return data;
+}
 void* dequeue(void) {
     mtx_lock(&q_lock);
     void *data = NULL;
@@ -127,26 +151,7 @@ void* dequeue(void) {
         add_thread(thrd_current(), cond);
         cnd_wait(&cond, &q_lock);
         // thread has been awakened, can delete the first
-        Node *temp = q.front;
-        if(temp == NULL) {
-            printf("temp can't be null after thread has been awakened");
-            return NULL;
-        }
-        data = temp->data;
-        q.front = q.front->next;
-        if(q.front == NULL) {
-            q.back = NULL;
-        }
-        q.visited++;
-        q.size--;
-        free(temp);
-        threads.waiting--;
-        awaken = false;
-        // if there are still threads waiting and there are more elements to dequeue, then awaken the next thread.
-        if(threads.front != NULL && q.size > 0) {
-            awaken = true;
-            cnd_signal(&threads.front->cnd);
-        }
+        data = awaken_dequeue(data);
         mtx_unlock(&q_lock);
         return data;
     }
@@ -170,16 +175,14 @@ void* dequeue(void) {
 
 bool tryDequeue(void** data) {
     mtx_lock(&q_lock);
-    if(q.front != NULL) {
-        Node *temp = q.front;
-        *data = q.front->data;
-        q.front = q.front->next;
-        if(q.front == NULL) {
-            q.back = NULL;
-        }
-        free(temp);
-        q.size--;
-        q.visited++;
+    // if there are more elements than awaken + waiting threads, put to sleep
+    if(awaken + threads.waiting < q.size) {
+        cnd_t cond;
+        cnd_init(&cond);
+        add_thread(thrd_current(), cond);
+        cnd_wait(&cond, &q_lock);
+        // once awaken there are enough threads to work with
+        data = awaken_dequeue(data);
         mtx_unlock(&q_lock);
         return true;
     }
