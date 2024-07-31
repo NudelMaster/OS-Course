@@ -19,7 +19,7 @@ typedef struct ThreadQueue {
 typedef struct Node{
     void *data;
     struct Node *next;
-    thrd_t *deleting_thrd;
+
 }Node;
 
 typedef struct Queue {
@@ -32,7 +32,7 @@ typedef struct Queue {
 queue q;
 thrd_queue threads;
 mtx_t q_lock;
-
+bool awaken = false;
 
 void initQueue(void) {
     q.front = q.back = NULL;
@@ -91,8 +91,6 @@ void enqueue(void* Data) {
     Node *newElem = malloc(sizeof(Node));
     newElem->data = Data;
     newElem->next = NULL;
-    // default value for later use
-    newElem->deleting_thrd = NULL;
     // adding the node to the queue
     mtx_lock(&q_lock);
     if(q.front == NULL) {
@@ -103,12 +101,14 @@ void enqueue(void* Data) {
         q.back = newElem;
     }
     q.size++;
-    // waking up the oldest thread if exists
-    if(threads.front != NULL) {
+    // if threads are waiting and none have been awaken yet start awakening
+    // if there are no threads waiting no need to awake
+    // if a thread is awaken he will be responsible for awakening the rest of the threads
+    if(threads.front != NULL && !awaken) {
         // if there are threads waiting for dequeue
-        newElem->deleting_thrd = &threads.front->thrd;
         // wakeup for dequeue
         cnd_signal(&threads.front->cnd);
+        awaken = true;
         // once the correct thread signaled can be dequeued for the next waiting thread to be signaled
         // remove thread from queue - the mutex still hasn't been released
         remove_thread();
@@ -116,106 +116,53 @@ void enqueue(void* Data) {
     mtx_unlock(&q_lock);
 }
 
-void* woken_thrd_dequeue() {
-// function that removes an element according to a thread that has awakened
-    void *data = NULL;
-    Node *temp = NULL;
-    temp = q.front;
-    // if the current_thrd corresponds to the front node
-    if(*temp->deleting_thrd == thrd_current()) {
-        data = temp->data;
-        q.front = q.front->next;
-        if(q.front == NULL) {
-            q.back = NULL;
-        }
-        free(temp);
-        return data;
-    }
-    // search the corresponding running thread for the node to remove
-    Node *prev = NULL;
-    while(temp != NULL && *temp->deleting_thrd != thrd_current()) {
-        prev = temp;
-        temp = temp->next;
-    }
-    if(temp == NULL || prev == NULL) {
-        printf("Error, temp and prev should not be NULL since node must exist in Queue\n");
-        return NULL;
-    }
-    data = temp->data;
-    // if the node to remove is the back
-    if(temp == q.back) {
-        prev->next = NULL;
-        q.back = prev;
-    }
-    else {
-        // unlink the node from the queue
-        prev->next = temp->next;
-    }
-    free(temp);
-    return data;
-}
-void* non_waiting_thrd_dequeue() {
-    // function the dequeues element in case of more elements in queue than waiting threads
-    void *data = NULL;
-    Node *temp = NULL;
-    temp = q.front;
-    // if the current_thrd corresponds to the front node
-    if(temp->deleting_thrd == NULL) {
-        data = temp->data;
-        q.front = q.front->next;
-        if(q.front == NULL) {
-            q.back = NULL;
-        }
-        free(temp);
-        return data;
-    }
-    // search the corresponding running thread for the node to remove
-    Node *prev = NULL;
-    while(temp != NULL && temp->deleting_thrd != NULL) {
-        prev = temp;
-        temp = temp->next;
-    }
-    if(temp == NULL || prev == NULL) {
-        printf("Error, temp and prev should not be NULL since node must exist in Queue\n");
-        return NULL;
-    }
-    data = temp->data;
-    // if the node to remove is the back
-    if(temp == q.back) {
-        prev->next = NULL;
-        q.back = prev;
-    }
-    else {
-        // unlink the node from the queue
-        prev->next = temp->next;
-    }
-    free(temp);
-    return data;
-}
+
 void* dequeue(void) {
     mtx_lock(&q_lock);
     void *data = NULL;
-    if(q.size <= threads.waiting) {
-        // in case of not having enough elements to dequeue send thread to sleep
-        // add thread to the thread queue
+    // if no elements in the queue or there is at least one thread that is awaken go to sleep
+    if(q.front == NULL || awaken) {
         cnd_t cond;
         cnd_init(&cond);
         add_thread(thrd_current(), cond);
-        // start waiting until this thread is woken up, occurs after enqueue
         cnd_wait(&cond, &q_lock);
-        // after waking up there is at least one element in the front, reach the correct node and remove
-        // when wakes up he has a node that waits for him for removal now the only thing left is to find and remove it
-        data = woken_thrd_dequeue();
-        threads.waiting--;
-        q.size--;
-        //each dequeue makes one item visit a queue
+        // thread has been awakened, can delete the first
+        Node *temp = q.front;
+        if(temp == NULL) {
+            printf("temp can't be null after thread has been awakened");
+            return NULL;
+        }
+        data = temp->data;
+        q.front = q.front->next;
+        if(q.front == NULL) {
+            q.back = NULL;
+        }
         q.visited++;
+        q.size--;
+        free(temp);
+        threads.waiting--;
+        awaken = false;
+        // if there are still threads waiting and there are more elements to dequeue, then awaken the next thread.
+        if(threads.front != NULL && q.size > 0) {
+            awaken = true;
+            cnd_signal(&threads.front->cnd);
+        }
         mtx_unlock(&q_lock);
         return data;
-        }
-    // at this point there is at least 1 element in the queue which doesn't have a waiting thread,
-    // find the element which doesn't have a thread attached to it
-    data = non_waiting_thrd_dequeue();
+    }
+    // if q has elements and none is awaken, meaning in this point dequeue was called after series of enqueues
+    Node *temp = q.front;
+    if(temp == NULL) {
+        printf("temp can't be null after thread has been awakened");
+        return NULL;
+    }
+    data = temp->data;
+    q.front = q.front->next;
+    if(q.front == NULL) {
+        q.back = NULL;
+    }
+    q.visited++;
+    q.size--;
     mtx_unlock(&q_lock);
     return data;
 
