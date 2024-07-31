@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <threads.h>
-
+#include <unistd.h>
 typedef struct ThreadNode {
     thrd_t thrd;
     cnd_t cnd;
@@ -35,6 +35,7 @@ mtx_t q_lock;
 bool awaken = false;
 
 void initQueue(void) {
+    printf("Initiating Queue \n");
     q.front = q.back = NULL;
     threads.front = threads.back = NULL;
     q.size = 0;
@@ -42,6 +43,7 @@ void initQueue(void) {
     mtx_init(&q_lock, mtx_plain);
 }
 void destroyQueue(void) {
+    printf("Destroying Queue \n");
     mtx_lock(&q_lock);
     while(q.front != NULL) {
         Node *tmp = q.front;
@@ -62,7 +64,9 @@ void destroyQueue(void) {
     mtx_unlock(&q_lock);
     mtx_destroy(&q_lock);
 }
-void add_thread(thrd_t thread, cnd_t cnd) {
+void add_thread(thrd_t thread) {
+    cnd_t cnd;
+    cnd_init(&cnd);
     ThreadNode* thread_node = malloc(sizeof(ThreadNode));
     thread_node->thrd = thread;
     thread_node->cnd = cnd;
@@ -87,13 +91,43 @@ void remove_thread(void) {
         free(tmp);
     }
 }
+void printThreadElements(void) {
+    int i = 0;
+    if(threads.front == NULL) {
+        printf("No threads waiting\n");
+    }
+    else {
+        ThreadNode *tmp = threads.front;
+        while(tmp != NULL) {
+            printf("Waiting Thread number %d, is %lu\n", i, tmp->thrd);
+            tmp = tmp->next;
+        }
+        sleep(1);
+    }
+    i = 0;
+    if(q.front == NULL) {
+        printf("No elements in queue\n");
+    }
+    else {
+        Node *tmp = q.front;
+        while(tmp != NULL) {
+            printf("Node number %d, is %p\n", i, q.front->data);
+            tmp = tmp->next;
+        }
+        sleep(2);
+    }
 
+}
 void enqueue(void* Data) {
     Node *newElem = malloc(sizeof(Node));
     newElem->data = Data;
     newElem->next = NULL;
     // adding the node to the back of the queue
     mtx_lock(&q_lock);
+    printf("current thread working on enqueue is: %lu \n", thrd_current());
+    sleep(2);
+    printThreadElements();
+    printf("Iniating enqueue \n");
     if(q.front == NULL) {
         q.front = q.back = newElem;
     }
@@ -108,12 +142,14 @@ void enqueue(void* Data) {
     if(threads.front != NULL && !awaken) {
         // if there are threads waiting for dequeue
         // wakeup for dequeue
+        printf("current thread awakening during enqueue is: %lu \n", threads.front->thrd);
         cnd_signal(&threads.front->cnd);
         awaken = true;
         // once the correct thread signaled can be dequeued for the next waiting thread to be signaled
         // remove thread from queue - the mutex still hasn't been released
         remove_thread();
     }
+    printf("Unlocking enqueue lock \n");
     mtx_unlock(&q_lock);
 }
 
@@ -135,6 +171,7 @@ void* awaken_dequeue(void** data) {
     awaken = false;
     // if there are still threads waiting and there are more elements to dequeue, then awaken the next thread.
     if(threads.front != NULL && q.size > 0) {
+        printf("next thread awakening during dequeue is:  %lu \n", threads.front->thrd);
         cnd_signal(&threads.front->cnd);
         awaken = true;
         remove_thread();
@@ -143,14 +180,17 @@ void* awaken_dequeue(void** data) {
 }
 void* dequeue(void) {
     mtx_lock(&q_lock);
+    printf("New thread trying to dequeue is: %lu\n", thrd_current());
+    sleep(2);
+    printThreadElements();
     void *data = NULL;
     // if no elements in the queue or there is at least one thread that is awaken go to sleep
     if(q.front == NULL || awaken) {
-        cnd_t cond;
-        cnd_init(&cond);
-        add_thread(thrd_current(), cond);
-        cnd_wait(&cond, &q_lock);
+        add_thread(thrd_current());
+        printf("Dequeue thread has been put to sleep \n");
+        cnd_wait(&threads.back->cnd, &q_lock);
         // thread has been awakened, can delete the first
+        printf("Awakened thread is: %lu\n", thrd_current());
         data = awaken_dequeue(data);
         mtx_unlock(&q_lock);
         return data;
@@ -158,7 +198,7 @@ void* dequeue(void) {
     // if q has elements and none is awaken, meaning in this point dequeue was called after series of enqueues
     Node *temp = q.front;
     if(temp == NULL) {
-        printf("temp can't be null after thread has been awakened");
+        printf("temp can't be null after thread has been awakened\n");
         return NULL;
     }
     data = temp->data;
@@ -170,17 +210,17 @@ void* dequeue(void) {
     q.size--;
     mtx_unlock(&q_lock);
     return data;
-
 }
 
 bool tryDequeue(void** data) {
     mtx_lock(&q_lock);
+    printf("New Thread tryin to tryDequeue: %lu\n", thrd_current());
+    sleep(2);
+    printThreadElements();
     // if there are more elements than awaken + waiting threads, put to sleep
     if(awaken + threads.waiting < q.size) {
-        cnd_t cond;
-        cnd_init(&cond);
-        add_thread(thrd_current(), cond);
-        cnd_wait(&cond, &q_lock);
+        add_thread(thrd_current());
+        cnd_wait(&threads.back->cnd, &q_lock);
         // once awaken there are enough threads to work with
         data = awaken_dequeue(data);
         mtx_unlock(&q_lock);
