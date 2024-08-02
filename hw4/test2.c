@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <unistd.h>
-#include "queue.c"
+#include "queue.h"
 
 #define NUM_OPERATIONS 10
 #define MAX_SIZE 1000
