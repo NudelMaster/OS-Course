@@ -1,6 +1,3 @@
-//
-// Created by yefim on 30/06/2024.
-//
 # include "os.h"
 
 uint64_t getentry_index(uint64_t vpn, int level){
@@ -11,7 +8,7 @@ uint64_t getentry_index(uint64_t vpn, int level){
 void page_table_update(uint64_t pt, uint64_t vpn, uint64_t ppn){
     uint64_t root = pt << 12;
     uint64_t* table = phys_to_virt(root);
-    int entry_index = 0;
+    uint64_t entry_index = 0;
     for (int i = 0; i < 4; i++){
         entry_index  = getentry_index(vpn, i);
         if ((table[entry_index] & 1) == 0){
@@ -25,6 +22,7 @@ void page_table_update(uint64_t pt, uint64_t vpn, uint64_t ppn){
     /* if program got to this point, then we are in the last level and can access the last entry_index */
     entry_index = vpn & 0x1ff;
     if (ppn == NO_MAPPING){
+        // destroying the mapping by invalidating the entry
         table[entry_index] = 0;
 
     }
@@ -38,7 +36,7 @@ void page_table_update(uint64_t pt, uint64_t vpn, uint64_t ppn){
 uint64_t page_table_query(uint64_t pt, uint64_t vpn){
     uint64_t root = pt << 12; /* adding offset to the frame number */
     uint64_t* table = phys_to_virt(root);
-    int entry_index = 0;
+    uint64_t entry_index = 0;
     for (int i = 0; i < 4; i++){
         /* shifting to the right to get the i'th part of the vpn + masking in order to get the value of the 9 bits */
         entry_index = getentry_index(vpn, i);
