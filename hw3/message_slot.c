@@ -10,6 +10,7 @@
 #include<linux/kernel.h>
 #include<linux/fs.h>
 #include<linux/uaccess.h>
+#include<linux/string.h>
 #include "message_slot.h"
 MODULE_LICENSE("GPL");
 
@@ -18,9 +19,9 @@ MODULE_LICENSE("GPL");
 
 typedef struct node {
     ssize_t channel_id;
-    char *msg;
+    char msg[MESSAGE_LEN];
     int msg_len;
-    struct channel *next;
+    struct node *next;
 }channel;
 
 typedef struct device {
@@ -34,60 +35,69 @@ static Device devices[256]; // 256 minors
 
 static channel* getOrCreate_Channel(Device* dev, ssize_t id) {
     channel* head;
-    channel *curr;
     channel *prev;
     head = dev->channels;
     // in case of empty list
-    if(head == NULL) {
-        head = (channel *)kmalloc(sizeof(channel), GFP_KERNEL);
+    if(!head) {
+        printk("Device desn't have channels yet, creating new channel head: %lu \n", id);
+        head = kmalloc(sizeof(channel), GFP_KERNEL);
         if(head == NULL) {
-            kfree(head);
+            printk("Failed to allocate memory \n");
             return NULL;
         }
         head->channel_id = id;
-        head->msg = NULL;
+        memset(head->msg, 0, sizeof(head->msg));
         head->msg_len = 0;
         head->next = NULL;
+        // assigning head of this device channel
+        dev->channels = head;
+        printk(KERN_INFO "Created new head channel %lu\n", id);
         return head;
     }
 
-    // if list isn't empty then there is at least one channel as the head
-
-
-    curr = head;
-    prev = curr;
-    // assuming that list has at least one node
-    while(curr != NULL) {
-        if(curr->channel_id == id) {
-            return curr;
+    // list isn't empty
+    while(head) {
+        printk("curr channel id is %ld \n", head->channel_id);
+        if(head->channel_id == id) {
+            printk(KERN_INFO "found channel %lu \n", id);
+            return head;
         }
-        prev = curr;
-        curr = (channel *)curr->next;
+        prev = head;
+        head = head->next;
     }
-    // if we haven't found an id and reached curr == NULL
-    prev->next = kmalloc(sizeof(channel), GFP_KERNEL);
-    prev = (channel *)prev->next;
-    prev->channel_id = id;
-    prev->msg = NULL;
-    prev->msg_len = 0;
-    prev->next = NULL;
-    return prev;
+    // if not found, create new channel
+    head = kmalloc(sizeof(channel), GFP_KERNEL);
+    if(!head){
+        printk(KERN_WARNING "Failed to allocate memory\n");
+        return NULL;
+    }
+    head->channel_id = id;
+    head->msg_len = 0;
+    memset(head->msg, 0, sizeof(head->msg));
+    head->next = NULL;
+
+    // add new node to the list
+    prev->next = head;
+
+    printk(KERN_INFO "created new channel %lu\n", id);
+    return head;
+
 }
 
 // ======================= MEMORY CLEANUP =========================================
 
 static void free_slot_mem(channel* head) {
-    channel *curr, *next;
 
+
+    channel *next;
     if (head == NULL) {
         return;
     }
-    curr = head;
-    while(curr != NULL) {
-        kfree(curr->msg);
-        next = (channel *)curr->next;
-        kfree(curr);
-        curr = next;
+    while(head != NULL) {
+        kfree(head->msg);
+        next = head->next;
+        kfree(head);
+        head = next;
     }
 }
 static void free_devices_mem(void) {
@@ -100,12 +110,12 @@ static void free_devices_mem(void) {
 // ====================== DEVICE FUNCTIONS =============================
 
 static int device_open(struct inode* inode, struct file* file) {
-    int minor = iminor(inode);
-    printk("Invoking device_open(%p)\n", file);
-
+    int minor;
+    minor = iminor(inode);
+    printk(KERN_INFO "Invoking device_open for file: %p, with minor: %d\n", file, minor);
 
     if(devices[minor].minor < 0) {
-        printk("Creating msg slot for minor: %d\n", minor);
+        printk(KERN_INFO "Creating msg slot for minor: %d\n", minor);
         devices[minor].minor = minor;
         devices[minor].channels = NULL;
     }
@@ -113,7 +123,7 @@ static int device_open(struct inode* inode, struct file* file) {
 }
 static int device_release(struct inode* inode, struct file* file) {
 
-    printk("Releasing open instance of file with minor: %d, and channel: %lu\n", iminor(inode), (unsigned long)file->private_data);
+    printk("Releasing open instance of file with minor: %d, and channel: %lu \n", iminor(inode), (ssize_t)file->private_data);
     file->private_data = NULL;
     return 0;
 
@@ -130,24 +140,23 @@ static ssize_t device_write(struct file* file,
         printk(KERN_WARNING "No channel set\n");
         return -EINVAL;
     }
-    if(length > MESSAGE_LEN) {
+    if(length == 0 || length > MESSAGE_LEN) {
+		printk("Provided length is invalid \n");
         return -EMSGSIZE;
     }
     channel_id = (ssize_t)file->private_data;
     minor = iminor(file->f_inode);
 
     // assuming minor size are in range since using chregister
+    printk("getting or creating node for channel id %lu \n", channel_id);
     ch = getOrCreate_Channel(&devices[minor], channel_id);
-    ch->msg = kmalloc(MESSAGE_LEN + 1, GFP_KERNEL);
-    if(ch->msg == NULL) {
-        printk(KERN_WARNING "No message has been sent\n");
-        return -EFAULT;
-    }
 
-    printk(KERN_INFO "Invoking writing into device file with minor %d,  channel_id: the msg: :%ld%s\n", minor, channel_id, buffer);
+
+
+    printk(KERN_INFO "Invoking writing into device file with minor: %d, channel_id: %lu, the msg:: %s \n", minor, channel_id, buffer);
     err = copy_from_user(ch->msg, buffer, length);
-    if(!err) {
-        printk(KERN_WARNING "Error in copying from user");
+    if(err != 0) {
+        printk(KERN_WARNING "Error in copying from user \n");
         return -EFAULT;
     }
     ch->msg_len = length;
@@ -159,27 +168,30 @@ static ssize_t device_read(struct file* file,
                         char __user* buffer,
                         size_t length,
                         loff_t* offset) {
-
     int err, minor;
     ssize_t channel_id;
     channel *ch;
     if(file->private_data == NULL) {
+        printk(KERN_WARNING "error, the file doesn't point to channel \n");
         return -EINVAL;
     }
     channel_id = (ssize_t)file->private_data;
     minor = iminor(file->f_inode);
     // assuming minor size are in range since using chregister
+    printk("Reading from device with minor : %d, and channel_id %ld\n",minor, channel_id);
     ch = getOrCreate_Channel(&devices[minor], channel_id);
     // checking if it has a msg
-    if(ch->msg == NULL) {
+    if(ch->msg_len == 0) {
+        printk(KERN_WARNING "Error, no message exists on channel\n");
         return -EWOULDBLOCK;
     }
-    if(ch->msg_len > MESSAGE_LEN) {
+    if(ch->msg_len > length) {
+		printk(KERN_WARNING "Provided buffer length is too small to contain the previous written message \n");
         return -ENOSPC;
     }
-
     err = copy_to_user(buffer, ch->msg, ch->msg_len);
-    if(!err) {
+    if(err != 0) {
+        printk(KERN_WARNING "error in copying\n");
         return -EFAULT;
     }
     return ch->msg_len;
@@ -189,7 +201,7 @@ static long device_ioctl(struct file* file,
     unsigned int ioctl_command_id,
     unsigned long ioctl_param) {
 
-    printk(KERN_INFO "device_ioctl called\n");
+    printk(KERN_INFO "device_ioctl called for minor: %d, passing channel: %lu \n", iminor(file->f_inode), ioctl_param);
     if(ioctl_command_id != IOCTL_MSG_SLOT_CHANNEL || ioctl_param == 0) {
         return -EINVAL;
     }
@@ -211,7 +223,7 @@ struct file_operations FOPS = {
 };
 
 static int __init msg_slot_init(void) {
-    int rc;
+    int rc = -1;
     int i;
     printk(KERN_INFO "Initializing message slot module\n");
     rc = register_chrdev(MAJOR_NUM, DEVICE_FILE_NAME, &FOPS);
