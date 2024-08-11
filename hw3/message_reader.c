@@ -19,7 +19,7 @@ int main(int argc, char* args[]) {
 
     int fd = open(path, O_RDWR);
     if (fd < 0) {
-        err("Error in file opening\n");
+        err("Error in file opening\n")
     }
     if(ioctl(fd, IOCTL_MSG_SLOT_CHANNEL, channel_id) < 0) {
         close(fd);
