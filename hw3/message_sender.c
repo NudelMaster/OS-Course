@@ -24,7 +24,7 @@ int main(int argc, char* args[]) {
     int set_id = ioctl(fd, IOCTL_MSG_SLOT_CHANNEL, channel_id);
     if(set_id < 0) {
         close(fd);
-        err("Error in setting channel idn");
+        err("Error in setting channel id \n")
     }
 
     if(write(fd, msg, strlen(msg)) < 0) {
